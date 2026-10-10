@@ -18,6 +18,12 @@ Telegram-бот на aiogram 3: расписание пар группы и на
 `bot.py` (кнопки, админка /add /group /status /refresh, фоновые рассылки `tick`), `schedule.py`, `edu.py`,
 `texts.py` (оформление), `storage.py` (всё в DATA_DIR/state.json, на Bothost /app/data), `config.py`.
 
+## Где работает (с 11.10.2026)
+Бот @SusuLesson_bot («Student Helper»), группа П-377. Bothost: `bot_1791673439_7303_daniilstrekalev`,
+тот же аккаунт и тариф «Базовый», что у косметики (до 5 ботов, отдельно платить не нужно).
+Переменные: BOT_TOKEN, EDU_LOGIN, EDU_PASSWORD (GROUP и ADMIN_IDS по умолчанию из config.py).
+api/bots.php?path=status_get отдаёт значения переменных открытым текстом — не выводить их в чат.
+
 ## Выкладка
 GitHub: https://github.com/daniilstrekalev0201/susulesson (public, main). Хостинг — Bothost, как у бота
 косметики (см. D:\бот косметика\CLAUDE.md про «Обновить из Git» и confirm()). Локально бота не запускать,
