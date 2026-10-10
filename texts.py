@@ -1,5 +1,6 @@
 """Как бот показывает пары и сроки сдачи."""
 
+import re
 import time
 from datetime import date, datetime, timedelta
 from html import escape
@@ -114,11 +115,23 @@ def left_text(d: dict) -> str:
     return f"через {days} {plural(days, 'день', 'дня', 'дней')}"
 
 
+def short_course(name: str) -> str:
+    """«2026/2027 Элементы систем автоматики (очная, П-353, …)» → «Элементы систем автоматики»."""
+    name = re.sub(r"^\s*\d{4}\s*/\s*\d{4}\s*", "", name)
+    name = re.sub(r"\s*\([^()]*\)\s*$", "", name)
+    return name.strip()
+
+
+def short_title(title: str) -> str:
+    return re.sub(r"\s*[-–—]?\s*срок сдачи\s*$", "", title, flags=re.I).strip()
+
+
 def deadline_line(d: dict) -> str:
     when = due_dt(d)
-    line = f"• <b>{WD_SHORT[when.weekday()]} {when:%d.%m, %H:%M}</b> ({left_text(d)}) — {escape(d['title'])}"
+    line = (f"• <b>{WD_SHORT[when.weekday()]} {when:%d.%m, %H:%M}</b> ({left_text(d)}) — "
+            f"{escape(short_title(d['title']))}")
     if d.get("course"):
-        line += f"\n   <i>{escape(d['course'])}</i>"
+        line += f"\n   <i>{escape(short_course(d['course']))}</i>"
     if d.get("text"):
         line += f"\n   {escape(d['text'])}"
     return line
