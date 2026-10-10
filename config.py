@@ -11,7 +11,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
 # Номер группы так, как он написан на susu.ru, например КЭ-101.
 # Можно поменять прямо в боте командой /group.
-GROUP = os.getenv("GROUP", "").strip()
+GROUP = os.getenv("GROUP", "П-377").strip()
 
 # Telegram ID админов через запятую. Админы добавляют ДЗ вручную и видят /status.
 DEFAULT_ADMIN_IDS = "974443828"

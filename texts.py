@@ -16,6 +16,7 @@ KINDS = {
     "Лекции": "лекция",
     "Практические занятия и семинары": "практика",
     "Лабораторные работы": "лаба",
+    "Лабораторные занятия": "лаба",
 }
 
 
@@ -47,7 +48,9 @@ def lesson_line(x: dict) -> str:
     if kind:
         parts[0] += f" ({escape(kind)})"
     extra = []
-    if x["room"]:
+    if x["room"].upper().startswith("ДОТ"):
+        extra.append("дистанционно")
+    elif x["room"]:
         extra.append(f"ауд. {escape(x['room'])}")
     if x["subgroup"]:
         extra.append(f"подгр. {escape(x['subgroup'])}")
