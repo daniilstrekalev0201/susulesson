@@ -28,3 +28,10 @@ api/bots.php?path=status_get отдаёт значения переменных 
 GitHub: https://github.com/daniilstrekalev0201/susulesson (public, main). Хостинг — Bothost, как у бота
 косметики (см. D:\бот косметика\CLAUDE.md про «Обновить из Git» и confirm()). Локально бота не запускать,
 если он уже работает на сервере (Conflict getUpdates).
+
+## Конспекты (сделано 11.10.2026)
+Кнопка «📖 Конспекты» / /konspekty (notes.py): предмет → лекция → PDF, file_id кэшируется в state["file_ids"].
+82 PDF по 9 предметам, по СТО ЮУрГУ 04–2008 (рамка, штамп ф.2/2а, оглавление, выводы, библиография).
+Исходники konspekty/src/<предмет>/NN.txt (+ _subject.txt), сборка ЛОКАЛЬНО: `python konspekty/build.py [предмет]`
+(нужны reportlab, fonttools, шрифты Windows times*.ttf и seguisym.ttf) → konspekty/pdf/*.pdf и index.json, их коммитим.
+Проверка символов: `python konspekty/check_glyphs.py`. Подробности и что откуда взято — konspekty/PLAN.md.

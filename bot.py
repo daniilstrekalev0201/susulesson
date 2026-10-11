@@ -20,6 +20,7 @@ from aiogram.types import (BotCommand, CallbackQuery, InlineKeyboardButton,
                            ReplyKeyboardMarkup)
 
 import edu
+import notes
 import schedule
 import storage
 import texts
@@ -47,7 +48,7 @@ def is_admin(user_id: int | None) -> bool:
 def main_kb(user_id: int | None) -> ReplyKeyboardMarkup:
     rows = [[KeyboardButton(text=B_TODAY), KeyboardButton(text=B_TOMORROW)],
             [KeyboardButton(text=B_WEEK), KeyboardButton(text=B_DZ)],
-            [KeyboardButton(text=B_SETTINGS)]]
+            [KeyboardButton(text=notes.BTN), KeyboardButton(text=B_SETTINGS)]]
     if is_admin(user_id):
         rows[-1].append(KeyboardButton(text=B_ADD))
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
@@ -76,11 +77,12 @@ async def start(message: Message) -> None:
             f"Каждое утро в {MORNING_AT} пришлю пары на день и ближайшие сдачи, "
             f"вечером в {EVENING_AT} — пары на завтра, а ещё напомню о сроках сдачи "
             f"за 3 дня, за день и за 3 часа.\n\n"
+            "Конспекты лекций в PDF — «📖 Конспекты» или /konspekty.\n"
             "Настроить уведомления — «⚙️ Уведомления» или /settings, отписаться — /stop.")
     if message.chat.type == ChatType.PRIVATE:
         await message.answer(text, reply_markup=main_kb(message.from_user.id))
     else:
-        await message.answer(text + "\n\nКоманды: /today /tomorrow /week /dz /settings")
+        await message.answer(text + "\n\nКоманды: /today /tomorrow /week /dz /konspekty /settings")
 
 
 @router.message(Command("stop"))
@@ -450,12 +452,14 @@ async def main() -> None:
     bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     http = aiohttp.ClientSession()
     dp = Dispatcher(http=http)
+    dp.include_router(notes.router)  # раньше основного: кнопка не должна попасть в ввод ДЗ
     dp.include_router(router)
     await bot.set_my_commands([
         BotCommand(command="today", description="Пары сегодня"),
         BotCommand(command="tomorrow", description="Пары завтра"),
         BotCommand(command="week", description="Пары на неделю"),
         BotCommand(command="dz", description="Ближайшие сдачи"),
+        BotCommand(command="konspekty", description="Конспекты лекций (PDF)"),
         BotCommand(command="settings", description="Уведомления"),
         BotCommand(command="stop", description="Отписаться"),
     ])
