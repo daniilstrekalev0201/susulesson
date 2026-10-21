@@ -6,6 +6,7 @@ EDU_LOGIN/EDU_PASSWORD), берёт список курсов и события 
 когда владелец аккаунта сам сдал работу.
 """
 
+import asyncio
 import logging
 import time
 
@@ -57,11 +58,11 @@ def _flatten(params: dict, prefix: str = "") -> dict:
     return flat
 
 
-async def _call(session: aiohttp.ClientSession, token: str, function: str, **params):
+async def _call(session: aiohttp.ClientSession, token: str, function: str, timeout: int = 60, **params):
     data = {"wstoken": token, "wsfunction": function, "moodlewsrestformat": "json",
             **_flatten(params)}
     async with session.post(f"{URL}/webservice/rest/server.php", data=data,
-                            timeout=aiohttp.ClientTimeout(total=60)) as r:
+                            timeout=aiohttp.ClientTimeout(total=timeout)) as r:
         answer = await r.json(content_type=None)
     if isinstance(answer, dict) and "exception" in answer:
         if answer.get("errorcode") in ("invalidtoken", "accessexception"):
@@ -70,7 +71,13 @@ async def _call(session: aiohttp.ClientSession, token: str, function: str, **par
     return answer
 
 
+# ---------- преподаватели курсов ----------
+# Moodle отвечает на эти запросы медленно, поэтому они идут в фоне раз в TEACHERS_EVERY_H часов
+# и не задерживают сроки сдачи и команду /refresh.
+
+TEACHERS_EVERY_H = 12
 TEACHER_ROLES = ("editingteacher", "teacher")
+_teachers_task: asyncio.Task | None = None
 
 
 def _short_name(fullname: str) -> str:
@@ -81,41 +88,71 @@ def _short_name(fullname: str) -> str:
     return parts[0] + " " + " ".join(p[0] + "." for p in parts[1:3])
 
 
-async def _teachers(session: aiohttp.ClientSession, token: str, course_ids: list[int]) -> dict:
-    """Преподаватели курсов: {id курса: ["Иванов И. И.", ...]}.
+async def _course_teachers(session: aiohttp.ClientSession, token: str, cid: int) -> list[str]:
+    """Преподаватели курса, у которого нет «контактов»: кто может править курс, иначе — по ролям участников."""
+    try:
+        answer = await _call(session, token, "core_enrol_get_enrolled_users_with_capability", timeout=30,
+                             coursecapabilities=[{"courseid": cid, "capabilities": ["moodle/course:update"]}],
+                             options=[{"name": "userfields", "value": "fullname"}])
+        users = answer[0]["users"] if answer else []
+        if users:
+            return [_short_name(u["fullname"]) for u in users]
+    except (EduError, aiohttp.ClientError, TimeoutError, KeyError, IndexError, TypeError) as e:
+        log.info("edu.susu.ru: курс %s, преподаватели по правам: %r", cid, e)
+    users = await _call(session, token, "core_enrol_get_enrolled_users", timeout=40, courseid=cid,
+                        options=[{"name": "userfields", "value": "fullname,roles"}])
+    rank = {}
+    for u in users:
+        roles = [TEACHER_ROLES.index(r["shortname"]) for r in u.get("roles", [])
+                 if r.get("shortname") in TEACHER_ROLES]
+        if roles:
+            rank[_short_name(u["fullname"])] = min(roles)
+    return sorted(rank, key=rank.get)  # сначала лектор (editingteacher), потом ассистенты
 
-    Сначала «контакты курса» (их Moodle показывает в списке курсов), если их нет —
-    участники курса с ролью преподавателя.
-    """
-    answer = await _call(session, token, "core_course_get_courses_by_field",
-                         field="ids", value=",".join(map(str, course_ids)))
-    result = {c["id"]: [_short_name(p["fullname"]) for p in c.get("contacts") or []]
-              for c in answer.get("courses", [])}
-    for cid in course_ids:
-        if result.get(cid):
+
+async def _update_teachers(session: aiohttp.ClientSession, token: str, names: dict) -> None:
+    edu = storage.state["edu"]
+    started = time.monotonic()
+    found = {}
+    try:
+        answer = await _call(session, token, "core_course_get_courses_by_field", timeout=40,
+                             field="ids", value=",".join(map(str, names)))
+        found = {c["id"]: [_short_name(p["fullname"]) for p in c.get("contacts") or []]
+                 for c in answer.get("courses", [])}
+        log.info("edu.susu.ru: контакты есть у %d курсов из %d (%.0f с)",
+                 sum(map(bool, found.values())), len(names), time.monotonic() - started)
+    except (EduError, aiohttp.ClientError, TimeoutError, KeyError, ValueError) as e:
+        log.warning("edu.susu.ru: контакты курсов: %r (%.0f с)", e, time.monotonic() - started)
+    for cid in names:
+        if found.get(cid):
             continue
+        moment = time.monotonic()
         try:
-            users = await _call(session, token, "core_enrol_get_enrolled_users", courseid=cid,
-                                options=[{"name": "userfields", "value": "fullname,roles"}])
-        except EduError:
-            continue
-        rank = {}
-        for u in users:
-            roles = [TEACHER_ROLES.index(r["shortname"]) for r in u.get("roles", [])
-                     if r.get("shortname") in TEACHER_ROLES]
-            if roles:
-                rank[_short_name(u["fullname"])] = min(roles)
-        # Сначала лектор (editingteacher), потом ассистенты.
-        result[cid] = sorted(rank, key=rank.get)
-    return {cid: list(dict.fromkeys(who))[:3] for cid, who in result.items()}
+            found[cid] = await _course_teachers(session, token, cid)
+        except (EduError, aiohttp.ClientError, TimeoutError, KeyError, ValueError) as e:
+            log.warning("edu.susu.ru: курс %s, участники: %r (%.0f с)", cid, e, time.monotonic() - moment)
+    teachers = {names[cid]: list(dict.fromkeys(who))[:3] for cid, who in found.items() if who and cid in names}
+    if teachers:
+        edu["teachers"] = teachers
+    edu["teachers_at"] = time.time()
+    storage.save()
+    log.info("edu.susu.ru: преподаватели известны для %d курсов из %d (%.0f с)",
+             len(teachers), len(names), time.monotonic() - started)
 
 
-async def _fetch(session: aiohttp.ClientSession, token: str) -> list[dict]:
+async def _teachers_safe(session: aiohttp.ClientSession, token: str, names: dict) -> None:
+    try:
+        await _update_teachers(session, token, names)
+    except Exception:
+        log.exception("edu.susu.ru: ошибка при загрузке преподавателей")
+
+
+async def _fetch(session: aiohttp.ClientSession, token: str) -> tuple[list[dict], dict]:
     info = await _call(session, token, "core_webservice_get_site_info")
     courses = await _call(session, token, "core_enrol_get_users_courses", userid=info["userid"])
     names = {c["id"]: c.get("fullname") or c.get("shortname") or "" for c in courses}
     if not names:
-        return []
+        return [], names
     now = int(time.time())
     answer = await _call(
         session, token, "core_calendar_get_calendar_events",
@@ -123,12 +160,6 @@ async def _fetch(session: aiohttp.ClientSession, token: str) -> list[dict]:
         options={"userevents": False, "siteevents": False,
                  "timestart": now - 86400, "timeend": now + DAYS_AHEAD * 86400},
     )
-    try:
-        teachers = await _teachers(session, token, list(names))
-        storage.state["edu"]["teachers"] = {names[cid]: who for cid, who in teachers.items()
-                                            if who and cid in names}
-    except (EduError, aiohttp.ClientError, TimeoutError, KeyError, ValueError) as e:
-        log.warning("edu.susu.ru: не удалось узнать преподавателей: %r", e)
     deadlines = []
     for e in answer.get("events", []):
         if e.get("eventtype") not in DEADLINE_TYPES or not e.get("modulename"):
@@ -141,7 +172,7 @@ async def _fetch(session: aiohttp.ClientSession, token: str) -> list[dict]:
             "url": f"{URL}/course/view.php?id={e.get('courseid')}",
             "source": "edu",
         })
-    return deadlines
+    return deadlines, names
 
 
 async def refresh(session: aiohttp.ClientSession, force: bool = False) -> list[dict]:
@@ -153,10 +184,10 @@ async def refresh(session: aiohttp.ClientSession, force: bool = False) -> list[d
         try:
             if not edu["token"]:
                 edu["token"] = await _login(session)
-            deadlines = await _fetch(session, edu["token"])
+            deadlines, names = await _fetch(session, edu["token"])
         except TokenExpired:
             edu["token"] = await _login(session)
-            deadlines = await _fetch(session, edu["token"])
+            deadlines, names = await _fetch(session, edu["token"])
     except (EduError, aiohttp.ClientError, TimeoutError, KeyError, ValueError) as e:
         edu["error"] = str(e) or repr(e)
         edu["at"] = time.time()
@@ -173,4 +204,9 @@ async def refresh(session: aiohttp.ClientSession, force: bool = False) -> list[d
     edu["at"] = time.time()
     storage.save()
     log.info("edu.susu.ru: %d сроков сдачи, новых %d", len(deadlines), len(new))
+
+    global _teachers_task
+    stale = time.time() - edu.get("teachers_at", 0) > TEACHERS_EVERY_H * 3600
+    if names and (force or stale) and not (_teachers_task and not _teachers_task.done()):
+        _teachers_task = asyncio.create_task(_teachers_safe(session, edu["token"], names))
     return new
