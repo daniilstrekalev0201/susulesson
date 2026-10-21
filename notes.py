@@ -36,6 +36,11 @@ def _load() -> dict:
 SUBJECTS = _load()
 
 
+def _teacher(slug: str) -> str:
+    teacher = SUBJECTS[slug].get("teacher")
+    return f"\n👤 {escape(teacher)}" if teacher else ""
+
+
 def subjects_kb() -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(text=f"{s['subject']} ({len(s['lectures'])})",
                                   callback_data=f"ks:{slug}")] for slug, s in SUBJECTS.items()]
@@ -68,8 +73,8 @@ async def show_lectures(call: CallbackQuery) -> None:
     await call.answer()
     try:
         if slug in SUBJECTS:
-            await call.message.edit_text(f"📖 <b>{escape(SUBJECTS[slug]['subject'])}</b>\nВыберите лекцию:",
-                                         reply_markup=lectures_kb(slug))
+            await call.message.edit_text(f"📖 <b>{escape(SUBJECTS[slug]['subject'])}</b>{_teacher(slug)}"
+                                         "\nВыберите лекцию:", reply_markup=lectures_kb(slug))
         else:
             await call.message.edit_text("📖 Выберите предмет:", reply_markup=subjects_kb())
     except TelegramBadRequest:
@@ -89,7 +94,8 @@ async def send_lecture(call: CallbackQuery, bot: Bot) -> None:
     # Ключ включает размер файла: после пересборки PDF бот загрузит новую версию.
     key = f"{slug}/{lec['file']}:{os.path.getsize(path)}"
     cache = storage.state.setdefault("file_ids", {})
-    caption = f"📖 {escape(subject['subject'])}\nЛекция {lec['lecture']}. {escape(lec['title'])}"
+    caption = (f"📖 {escape(subject['subject'])}{_teacher(slug)}\n"
+               f"Лекция {lec['lecture']}. {escape(lec['title'])}")
     document = cache.get(key) or FSInputFile(path, filename=f"{subject['subject'][:40]} – лекция {num}.pdf")
     msg = await bot.send_document(call.message.chat.id, document, caption=caption[:1024])
     if key not in cache and msg.document:

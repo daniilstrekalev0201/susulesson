@@ -489,7 +489,7 @@ def build_all(only=None):
         files = sorted(f for f in os.listdir(os.path.join(src, subj)) if f.endswith(".txt") and not f.startswith("_"))
         lectures = [build(subj, f, os.path.join(HERE, "pdf", subj)) for f in files]
         index[subj] = {"slug": subj, "subject": meta["subject"], "order": int(meta.get("order", 99)),
-                       "lectures": sorted(lectures, key=lambda x: x["lecture"])}
+                       "teacher": meta.get("teacher", ""), "lectures": sorted(lectures, key=lambda x: x["lecture"])}
     os.makedirs(os.path.dirname(index_path), exist_ok=True)
     with open(index_path, "w", encoding="utf-8") as f:
         json.dump(sorted(index.values(), key=lambda s: (s["order"], s["subject"])), f, ensure_ascii=False, indent=1)

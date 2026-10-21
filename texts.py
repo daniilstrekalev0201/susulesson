@@ -5,6 +5,7 @@ import time
 from datetime import date, datetime, timedelta
 from html import escape
 
+import notes
 import schedule
 import storage
 from config import LOCAL_TZ
@@ -55,6 +56,9 @@ def lesson_line(x: dict) -> str:
         extra.append(f"ауд. {escape(x['room'])}")
     if x["subgroup"]:
         extra.append(f"подгр. {escape(x['subgroup'])}")
+    who = teachers(x["subject"])
+    if who:
+        extra.append(f"👤 {escape(', '.join(who))}")
     if extra:
         parts.append("      " + " · ".join(extra))
     return "\n".join(parts)
@@ -123,11 +127,17 @@ def short_course(name: str) -> str:
 
 
 def teachers(course: str) -> list[str]:
-    """Преподаватели предмета по курсам edu.susu.ru (подходит и для ДЗ, добавленных вручную)."""
+    """Преподаватели предмета (для пар, сдач и ДЗ, добавленных вручную).
+
+    Сначала из конспектов (взяты со страниц курсов и проверены), потом из курсов edu.susu.ru.
+    """
+    name = short_course(course).lower()
+    for s in notes.SUBJECTS.values():
+        if s.get("teacher") and s["subject"].lower() == name:
+            return [re.sub(r"(\w)\.(?=\w)", r"\1. ", t.strip()) for t in s["teacher"].split(",")]
     known = storage.state["edu"].get("teachers") or {}
     if course in known:
         return known[course]
-    name = short_course(course).lower()
     for full, who in known.items():
         if short_course(full).lower() == name:
             return who
