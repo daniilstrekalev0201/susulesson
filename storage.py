@@ -19,7 +19,8 @@ def _defaults() -> dict:
         "lessons_at": 0,
         "subscribers": {},      # chat_id -> настройки уведомлений
         "homework": [],         # ДЗ, добавленные админами вручную
-        "edu": {"token": None, "deadlines": [], "at": 0, "seen": None, "error": None},
+        "edu": {"token": None, "deadlines": [], "at": 0, "seen": None, "error": None,
+                "teachers": {}},        # курс edu.susu.ru -> ["Иванов И. И.", ...]
         "sent": {},             # уже отправленные напоминания, чтобы не повторяться
         "next_id": 1,
     }

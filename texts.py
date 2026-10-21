@@ -122,6 +122,18 @@ def short_course(name: str) -> str:
     return name.strip()
 
 
+def teachers(course: str) -> list[str]:
+    """Преподаватели предмета по курсам edu.susu.ru (подходит и для ДЗ, добавленных вручную)."""
+    known = storage.state["edu"].get("teachers") or {}
+    if course in known:
+        return known[course]
+    name = short_course(course).lower()
+    for full, who in known.items():
+        if short_course(full).lower() == name:
+            return who
+    return []
+
+
 def short_title(title: str) -> str:
     return re.sub(r"\s*[-–—]?\s*срок сдачи\s*$", "", title, flags=re.I).strip()
 
@@ -132,6 +144,9 @@ def deadline_line(d: dict) -> str:
             f"{escape(short_title(d['title']))}")
     if d.get("course"):
         line += f"\n   <i>{escape(short_course(d['course']))}</i>"
+        who = teachers(d["course"])
+        if who:
+            line += f" · 👤 {escape(', '.join(who))}"
     if d.get("text"):
         line += f"\n   {escape(d['text'])}"
     return line

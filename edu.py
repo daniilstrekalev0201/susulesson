@@ -70,6 +70,46 @@ async def _call(session: aiohttp.ClientSession, token: str, function: str, **par
     return answer
 
 
+TEACHER_ROLES = ("editingteacher", "teacher")
+
+
+def _short_name(fullname: str) -> str:
+    """«Иванов Иван Иванович» → «Иванов И. И.»."""
+    parts = fullname.split()
+    if len(parts) < 2:
+        return fullname.strip()
+    return parts[0] + " " + " ".join(p[0] + "." for p in parts[1:3])
+
+
+async def _teachers(session: aiohttp.ClientSession, token: str, course_ids: list[int]) -> dict:
+    """Преподаватели курсов: {id курса: ["Иванов И. И.", ...]}.
+
+    Сначала «контакты курса» (их Moodle показывает в списке курсов), если их нет —
+    участники курса с ролью преподавателя.
+    """
+    answer = await _call(session, token, "core_course_get_courses_by_field",
+                         field="ids", value=",".join(map(str, course_ids)))
+    result = {c["id"]: [_short_name(p["fullname"]) for p in c.get("contacts") or []]
+              for c in answer.get("courses", [])}
+    for cid in course_ids:
+        if result.get(cid):
+            continue
+        try:
+            users = await _call(session, token, "core_enrol_get_enrolled_users", courseid=cid,
+                                options=[{"name": "userfields", "value": "fullname,roles"}])
+        except EduError:
+            continue
+        rank = {}
+        for u in users:
+            roles = [TEACHER_ROLES.index(r["shortname"]) for r in u.get("roles", [])
+                     if r.get("shortname") in TEACHER_ROLES]
+            if roles:
+                rank[_short_name(u["fullname"])] = min(roles)
+        # Сначала лектор (editingteacher), потом ассистенты.
+        result[cid] = sorted(rank, key=rank.get)
+    return {cid: list(dict.fromkeys(who))[:3] for cid, who in result.items()}
+
+
 async def _fetch(session: aiohttp.ClientSession, token: str) -> list[dict]:
     info = await _call(session, token, "core_webservice_get_site_info")
     courses = await _call(session, token, "core_enrol_get_users_courses", userid=info["userid"])
@@ -83,6 +123,12 @@ async def _fetch(session: aiohttp.ClientSession, token: str) -> list[dict]:
         options={"userevents": False, "siteevents": False,
                  "timestart": now - 86400, "timeend": now + DAYS_AHEAD * 86400},
     )
+    try:
+        teachers = await _teachers(session, token, list(names))
+        storage.state["edu"]["teachers"] = {names[cid]: who for cid, who in teachers.items()
+                                            if who and cid in names}
+    except (EduError, aiohttp.ClientError, TimeoutError, KeyError, ValueError) as e:
+        log.warning("edu.susu.ru: не удалось узнать преподавателей: %r", e)
     deadlines = []
     for e in answer.get("events", []):
         if e.get("eventtype") not in DEADLINE_TYPES or not e.get("modulename"):
