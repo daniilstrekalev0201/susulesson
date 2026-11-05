@@ -19,6 +19,7 @@ from aiogram.types import (BotCommand, CallbackQuery, InlineKeyboardButton,
                            InlineKeyboardMarkup, KeyboardButton, Message,
                            ReplyKeyboardMarkup)
 
+import access
 import edu
 import notes
 import schedule
@@ -41,8 +42,7 @@ SETTINGS = [
 ]
 
 
-def is_admin(user_id: int | None) -> bool:
-    return user_id in ADMIN_IDS
+is_admin = access.is_admin
 
 
 def main_kb(user_id: int | None) -> ReplyKeyboardMarkup:
@@ -51,6 +51,8 @@ def main_kb(user_id: int | None) -> ReplyKeyboardMarkup:
             [KeyboardButton(text=notes.BTN), KeyboardButton(text=B_SETTINGS)]]
     if is_admin(user_id):
         rows[-1].append(KeyboardButton(text=B_ADD))
+    if access.is_owner(user_id):
+        rows.append([KeyboardButton(text=access.BTN)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
@@ -69,9 +71,12 @@ async def answer_schedule(message: Message, text: str) -> None:
 # ---------- студентам ----------
 
 @router.message(CommandStart())
-async def start(message: Message) -> None:
+async def start(message: Message, command: CommandObject, bot: Bot) -> None:
     storage.subscriber(message.chat.id, chat_title(message))
     storage.save()
+    args = command.args or ""
+    if args.startswith(access.INVITE_PREFIX) and message.chat.type == ChatType.PRIVATE:
+        await accept_invite(message, args[len(access.INVITE_PREFIX):], bot)
     group = schedule.current_group() or "—"
     text = (f"Привет! Я бот группы <b>{escape(group)}</b>.\n\n"
             f"Каждое утро в {MORNING_AT} пришлю пары на день и ближайшие сдачи, "
@@ -83,6 +88,22 @@ async def start(message: Message) -> None:
         await message.answer(text, reply_markup=main_kb(message.from_user.id))
     else:
         await message.answer(text + "\n\nКоманды: /today /tomorrow /week /dz /konspekty /settings")
+
+
+async def accept_invite(message: Message, code: str, bot: Bot) -> None:
+    user = message.from_user
+    if is_admin(user.id):
+        await message.answer("У вас уже есть доступ к добавлению ДЗ.")
+        return
+    owner = access.accept(code, user)
+    if not owner:
+        await message.answer("Ссылка-приглашение недействительна: её уже использовали или она устарела. "
+                             "Попросите новую.")
+        return
+    await message.answer("✅ Вам выдан доступ: теперь вы можете добавлять и удалять ДЗ "
+                         "(кнопка «➕ Добавить ДЗ» или /add).")
+    await send(bot, str(owner), f"✅ {escape(user.full_name)} получил(а) доступ к ДЗ. "
+               f"Список помощников — «{access.BTN}».")
 
 
 @router.message(Command("stop"))
@@ -180,7 +201,7 @@ async def myid(message: Message) -> None:
 
 @router.message(Command("group"))
 async def set_group(message: Message, command: CommandObject, http: aiohttp.ClientSession) -> None:
-    if not is_admin(message.from_user.id):
+    if not access.is_owner(message.from_user.id):
         return
     if not command.args:
         await message.answer(f"Сейчас группа: <b>{escape(schedule.current_group() or '—')}</b>\n"
@@ -256,6 +277,7 @@ def subjects_kb() -> InlineKeyboardMarkup:
 @router.message(F.text == B_ADD)
 async def add_hw(message: Message, state: FSMContext) -> None:
     if not is_admin(message.from_user.id):
+        await message.answer("Добавлять ДЗ могут только админы.", reply_markup=main_kb(message.from_user.id))
         return
     await state.set_state(AddHW.subject)
     await message.answer("По какому предмету ДЗ? Выберите или напишите название.",
@@ -452,7 +474,8 @@ async def main() -> None:
     bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     http = aiohttp.ClientSession()
     dp = Dispatcher(http=http)
-    dp.include_router(notes.router)  # раньше основного: кнопка не должна попасть в ввод ДЗ
+    dp.include_router(notes.router)  # раньше основного: кнопки не должны попасть в ввод ДЗ
+    dp.include_router(access.router)
     dp.include_router(router)
     await bot.set_my_commands([
         BotCommand(command="today", description="Пары сегодня"),

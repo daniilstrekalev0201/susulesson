@@ -21,6 +21,8 @@ def _defaults() -> dict:
         "homework": [],         # ДЗ, добавленные админами вручную
         "edu": {"token": None, "deadlines": [], "at": 0, "seen": None, "error": None,
                 "teachers": {}, "teachers_at": 0},  # курс edu.susu.ru -> ["Иванов И. И.", ...]
+        "admins": {},           # помощники: user_id -> {"name", "by", "at"} (владельцы — в ADMIN_IDS)
+        "invites": {},          # одноразовые ссылки-приглашения: код -> {"by", "at"}
         "sent": {},             # уже отправленные напоминания, чтобы не повторяться
         "next_id": 1,
     }

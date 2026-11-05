@@ -35,3 +35,8 @@ GitHub: https://github.com/daniilstrekalev0201/susulesson (public, main). Хос
 Исходники konspekty/src/<предмет>/NN.txt (+ _subject.txt), сборка ЛОКАЛЬНО: `python konspekty/build.py [предмет]`
 (нужны reportlab, fonttools, шрифты Windows times*.ttf и seguisym.ttf) → konspekty/pdf/*.pdf и index.json, их коммитим.
 Проверка символов: `python konspekty/check_glyphs.py`. Подробности и что откуда взято — konspekty/PLAN.md.
+
+## Доступ (сделано 05.11.2026)
+Владельцы — `ADMIN_IDS` (по умолчанию 974443828): кнопка «👥 Доступ» / /access, только они выдают доступ и меняют /group.
+Помощники — state["admins"], приходят по одноразовой ссылке `t.me/SusuLesson_bot?start=adm_<код>` (24 ч, state["invites"]),
+могут /add, удалять ДЗ, /status, /refresh. Логика — access.py, вход по ссылке — `accept_invite` в bot.py.
