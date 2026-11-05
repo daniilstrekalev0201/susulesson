@@ -40,3 +40,10 @@ GitHub: https://github.com/daniilstrekalev0201/susulesson (public, main). Хос
 Владельцы — `ADMIN_IDS` (по умолчанию 974443828): кнопка «👥 Доступ» / /access, только они выдают доступ и меняют /group.
 Помощники — state["admins"], приходят по одноразовой ссылке `t.me/SusuLesson_bot?start=adm_<код>` (24 ч, state["invites"]),
 могут /add, удалять ДЗ, /status, /refresh. Логика — access.py, вход по ссылке — `accept_invite` в bot.py.
+
+## Изменения в расписании (сделано 06.11.2026)
+schedule.refresh сравнивает новую копию с прошлой на общих днях (с сегодня до min(последний день старой, новой)),
+пометки в state["changes"] (orig/cur по ключу дата|время|подгруппа) живут до дня пары, вернули как было — снимаются.
+Показ: texts.change_note / cancelled_lines (🆕, 🔄, ❌, переносы ищет _moves). Рассылка — announce_changes
+(настройка «changes», с 7 до 22 по UTC+5, ночью копится в changes_pending). Если пропало >5 пар и больше половины —
+считаем сбоем сайта и принимаем, только когда страница повторит то же самое (st["suspect"]).

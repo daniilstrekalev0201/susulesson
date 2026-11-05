@@ -42,10 +42,14 @@ def day_title(day: date) -> str:
     return f"{WEEKDAYS[day.weekday()]}, {day:%d.%m}"
 
 
+def kind_name(kind: str) -> str:
+    return KINDS.get(kind, kind.lower())
+
+
 def lesson_line(x: dict) -> str:
     number = PAIR_NUMBERS.get(x["start"])
     mark = NUM_EMOJI[number] if number else "▫️"
-    kind = KINDS.get(x["kind"], x["kind"].lower())
+    kind = kind_name(x["kind"])
     parts = [f"{mark} {x['start']}–{x['end']} <b>{escape(x['subject'])}</b>"]
     if kind:
         parts[0] += f" ({escape(kind)})"
@@ -61,20 +65,131 @@ def lesson_line(x: dict) -> str:
         extra.append(f"👤 {escape(', '.join(who))}")
     if extra:
         parts.append("      " + " · ".join(extra))
+    note = change_note(x)
+    if note:
+        parts.append("      " + note)
     return "\n".join(parts)
 
 
+# ---------- изменения в расписании ----------
+
+def _when(x: dict) -> str:
+    day = date.fromisoformat(x["date"])
+    return f"{WD_SHORT[day.weekday()]} {day:%d.%m} {x['start']}"
+
+
+def _moves(changes: dict) -> dict[str, str]:
+    """Переносы: отменённая пара + новая пара того же предмета → {ключ новой: ключ отменённой}
+    и обратно. Сначала ищем в тот же день, потом среди замеченных одновременно."""
+    added = {k: c["cur"] for k, c in changes.items() if c["orig"] is None and c["cur"]}
+    gone = {k: c["orig"] for k, c in changes.items() if c["cur"] is None and c["orig"]}
+    pairs = {}
+    for same_day in (True, False):
+        for ka, a in added.items():
+            if ka in pairs:
+                continue
+            for kg, g in gone.items():
+                if kg in pairs or (a["subject"], a["kind"], a["subgroup"]) != (g["subject"], g["kind"], g["subgroup"]):
+                    continue
+                if (a["date"] == g["date"]) if same_day else (changes[ka]["at"] == changes[kg]["at"]):
+                    pairs[ka], pairs[kg] = kg, ka
+                    break
+    return pairs
+
+
+def _what_changed(o: dict, x: dict) -> str:
+    notes = []
+    if o["subject"] != x["subject"]:
+        notes.append(f"вместо «{escape(o['subject'])}»")
+    if o["kind"] != x["kind"]:
+        notes.append(f"была {escape(kind_name(o['kind']))}")
+    if o["room"] != x["room"]:
+        notes.append(f"ауд. {escape(o['room'] or '—')} → {escape(x['room'] or '—')}")
+    if o["end"] != x["end"]:
+        notes.append(f"была до {o['end']}")
+    return ", ".join(notes)
+
+
+def change_note(x: dict) -> str:
+    """Пометка у пары, которая поменялась: «🆕 новая пара», «🔄 изменено: ауд. …» и т. п."""
+    changes = storage.state["changes"]
+    k = schedule.key(x)
+    c = changes.get(k)
+    if not c:
+        return ""
+    o = c["orig"]
+    if o is None:
+        moved = _moves(changes).get(k)
+        if moved:
+            old = changes[moved]["orig"]
+            since = old["start"] if old["date"] == x["date"] else _when(old)
+            return f"🔄 <b>перенесена</b> (была {since})"
+        return "🆕 <b>новая пара</b>"
+    return "🔄 <b>изменено:</b> " + _what_changed(o, x)
+
+
+def cancelled_lines(day: date) -> list[tuple[str, str]]:
+    """Отменённые пары дня: [(время, строка)]. Перенесённые в тот же день не показываем."""
+    changes = storage.state["changes"]
+    moves = _moves(changes)
+    lines = []
+    for k, c in changes.items():
+        o = c["orig"]
+        if c["cur"] is not None or not o or o["date"] != day.isoformat():
+            continue
+        text = f"❌ <s>{o['start']}–{o['end']} {escape(o['subject'])}</s> ({escape(kind_name(o['kind']))})"
+        if k in moves:
+            new = changes[moves[k]]["cur"]
+            if new["date"] == o["date"]:
+                continue
+            text += f" — <b>перенесена на {_when(new)}</b>"
+        else:
+            text += " — <b>отменена</b>"
+        lines.append((o["start"], text))
+    return lines
+
+
+def changes_text(keys: list[str]) -> str:
+    """Уведомление об изменениях по ключам пар из state["changes"]."""
+    changes = storage.state["changes"]
+    moves = _moves(changes)
+    lines, done = [], set()
+    for k in sorted({k for k in keys if k in changes}):
+        if k in done:
+            continue
+        c = changes[k]
+        o, x = c["orig"], c["cur"]
+        if k in moves:
+            other = moves[k]
+            done |= {k, other}
+            old, new = (o, changes[other]["cur"]) if x is None else (changes[other]["orig"], x)
+            lines.append(f"🔄 <b>{escape(old['subject'])}</b> ({escape(kind_name(old['kind']))}): "
+                         f"перенесена с {_when(old)} на {_when(new)}")
+        elif o is None:
+            lines.append(f"🆕 {_when(x)} <b>{escape(x['subject'])}</b> ({escape(kind_name(x['kind']))})"
+                         " — новая пара")
+        elif x is None:
+            lines.append(f"❌ {_when(o)} <b>{escape(o['subject'])}</b> ({escape(kind_name(o['kind']))})"
+                         " — отменена")
+        else:
+            lines.append(f"🔄 {_when(x)} <b>{escape(x['subject'])}</b>: {_what_changed(o, x)}")
+    if not lines:
+        return ""
+    return "⚠️ <b>Изменения в расписании</b>\n\n" + "\n".join(lines)
+
+
 def day_text(day: date, empty: str = "Пар нет 🎉") -> str:
-    lessons = schedule.for_day(day)
+    rows = [(x["start"], lesson_line(x)) for x in schedule.for_day(day)] + cancelled_lines(day)
     head = f"📅 <b>{day_title(day)}</b>"
-    if not lessons:
+    if not rows:
         return f"{head}\n{empty}"
-    return head + "\n" + "\n".join(lesson_line(x) for x in lessons)
+    rows.sort(key=lambda r: r[0])
+    return head + "\n" + "\n".join(text for _, text in rows)
 
 
 def week_text(start: date) -> str:
     days = [start + timedelta(days=i) for i in range(7)]
-    blocks = [day_text(d) for d in days if schedule.for_day(d)]
+    blocks = [day_text(d) for d in days if schedule.for_day(d) or cancelled_lines(d)]
     if not blocks:
         return "На ближайшую неделю пар в расписании нет."
     return "\n\n".join(blocks)

@@ -17,6 +17,8 @@ def _defaults() -> dict:
         "group_url": None,      # адрес страницы группы на susu.ru
         "lessons": [],          # последнее скачанное расписание
         "lessons_at": 0,
+        "changes": {},          # изменения в расписании (см. schedule.py)
+        "changes_pending": [],  # ещё не разосланные изменения (ночью не шлём)
         "subscribers": {},      # chat_id -> настройки уведомлений
         "homework": [],         # ДЗ, добавленные админами вручную
         "edu": {"token": None, "deadlines": [], "at": 0, "seen": None, "error": None,
@@ -37,6 +39,8 @@ def load() -> dict:
         data.update(saved)
         for key, value in _defaults()["edu"].items():
             data["edu"].setdefault(key, value)
+        for sub in data["subscribers"].values():
+            sub.setdefault("changes", True)  # настройка появилась позже — у всех включена
     state.clear()
     state.update(data)
     return state
@@ -67,7 +71,7 @@ def subscriber(chat_id: int, title: str = "") -> dict:
     subs = state["subscribers"]
     key = str(chat_id)
     if key not in subs:
-        subs[key] = {"morning": True, "evening": True, "before": False, "deadlines": True}
+        subs[key] = {"morning": True, "evening": True, "before": False, "deadlines": True, "changes": True}
     if title:
         subs[key]["title"] = title
     return subs[key]

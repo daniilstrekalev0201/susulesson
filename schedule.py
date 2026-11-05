@@ -3,6 +3,7 @@
 На странице — пары на ближайшие ~2 недели с точными датами, сайт обновляет её каждый день.
 """
 
+import hashlib
 import html
 import logging
 import re
@@ -99,14 +100,72 @@ def parse(page: str) -> list[dict]:
     return lessons
 
 
-async def refresh(session: aiohttp.ClientSession, force: bool = False) -> None:
-    """Скачивает расписание, если пора. При ошибке остаётся прошлая копия."""
+# ---------- изменения в расписании ----------
+# state["changes"]: {ключ пары: {"orig": пара до первого изменения или None (новая пара),
+#                                "cur": пара сейчас или None (отменена), "at": когда заметили}}
+# Пометки живут, пока не прошёл день пары; вернулось как было — пометка снимается.
+
+BIG_DROP = 0.5  # пропала больше половины пар — скорее сбой сайта, ждём подтверждения
+
+
+def key(x: dict) -> str:
+    return f"{x['date']}|{x['start']}|{x['subgroup']}"
+
+
+def same(a: dict | None, b: dict | None) -> bool:
+    fields = ("subject", "kind", "room", "end")
+    if a is None or b is None:
+        return a is b
+    return all(a.get(f) == b.get(f) for f in fields)
+
+
+def _today() -> str:
+    return datetime.now(LOCAL_TZ).date().isoformat()
+
+
+def _diff(old: list[dict], new: list[dict]) -> tuple[list[tuple[str, dict | None, dict | None]], int]:
+    """Что поменялось на днях, которые есть в обеих копиях: ([(ключ, было, стало)], сколько пар было)."""
+    if not old or not new:
+        return [], 0
+    first = _today()
+    last = min(max(x["date"] for x in old), max(x["date"] for x in new))
+    window = lambda xs: {key(x): x for x in xs if first <= x["date"] <= last}
+    was, now = window(old), window(new)
+    diff = [(k, was.get(k), now.get(k)) for k in sorted(was.keys() | now.keys())
+            if not same(was.get(k), now.get(k))]
+    return diff, len(was)
+
+
+def _remember(diff: list) -> list[str]:
+    """Обновляет пометки, возвращает ключи новых изменений для уведомления."""
+    changes = storage.state["changes"]
+    fresh = []
+    for k, was, now in diff:
+        orig = changes[k]["orig"] if k in changes else was
+        if same(orig, now):
+            changes.pop(k, None)  # вернули как было
+            continue
+        changes[k] = {"orig": orig, "cur": now, "at": int(time.time())}
+        fresh.append(k)
+    return fresh
+
+
+def prune_changes() -> None:
+    first = _today()
+    storage.state["changes"] = {k: v for k, v in storage.state["changes"].items() if k[:10] >= first}
+
+
+async def refresh(session: aiohttp.ClientSession, force: bool = False) -> list[str]:
+    """Скачивает расписание, если пора. При ошибке остаётся прошлая копия.
+
+    Возвращает ключи новых изменений в расписании (для уведомления).
+    """
     st = storage.state
     group = current_group()
     if not group:
-        return
+        return []
     if not force and time.time() - st["lessons_at"] < SCHEDULE_REFRESH_MIN * 60:
-        return
+        return []
     try:
         if not st.get("group_url"):
             st["group_url"] = await find_group_url(session, group)
@@ -114,17 +173,32 @@ async def refresh(session: aiohttp.ClientSession, force: bool = False) -> None:
                 log.warning("Группа %s не найдена на susu.ru", group)
                 st["lessons_at"] = time.time()
                 storage.save()
-                return
+                return []
         lessons = parse(await _get(session, st["group_url"]))
     except (aiohttp.ClientError, TimeoutError) as e:
         log.warning("Не удалось скачать расписание: %r", e)
-        return
+        return []
+    fresh = []
     # Сайт иногда отдаёт пустую страницу — не затираем хорошую копию пустой.
     if lessons or not st["lessons"]:
+        diff, before = _diff(st["lessons"], lessons)
+        gone = sum(1 for _, _, now in diff if now is None)
+        signature = hashlib.md5(repr(lessons).encode()).hexdigest()
+        if gone > 5 and gone > BIG_DROP * before and st.get("suspect") != signature:
+            # Такое бывает при сбое сайта: ждём, пока страница повторит то же самое.
+            st["suspect"] = signature
+            st["lessons_at"] = time.time() - SCHEDULE_REFRESH_MIN * 60 + 20 * 60  # проверить через 20 мин
+            storage.save()
+            log.warning("Расписание: пропало %d пар — похоже на сбой, проверю ещё раз", gone)
+            return []
+        st.pop("suspect", None)
+        fresh = _remember(diff)
         st["lessons"] = lessons
+    prune_changes()
     st["lessons_at"] = time.time()
     storage.save()
-    log.info("Расписание %s обновлено: %d пар", group, len(lessons))
+    log.info("Расписание %s обновлено: %d пар, изменений %d", group, len(lessons), len(fresh))
+    return fresh
 
 
 def for_day(day: date) -> list[dict]:

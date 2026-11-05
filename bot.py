@@ -39,6 +39,7 @@ SETTINGS = [
     ("evening", f"Вечером ({EVENING_AT}): пары на завтра"),
     ("before", f"За {BEFORE_PAIR_MIN} мин до каждой пары"),
     ("deadlines", "Сроки сдачи и новые задания"),
+    ("changes", "Изменения в расписании"),
 ]
 
 
@@ -215,7 +216,7 @@ async def set_group(message: Message, command: CommandObject, http: aiohttp.Clie
                              "www.susu.ru/ru/raspisanie-zanyatiy")
         return
     st = storage.state
-    st.update(group=group, group_url=url, lessons=[], lessons_at=0)
+    st.update(group=group, group_url=url, lessons=[], lessons_at=0, changes={}, changes_pending=[])
     await schedule.refresh(http, force=True)
     await message.answer(f"Готово, группа <b>{escape(group)}</b>: "
                          f"{len(st['lessons'])} пар в расписании.\n{url}")
@@ -254,7 +255,8 @@ async def status(message: Message) -> None:
 async def refresh_now(message: Message, http: aiohttp.ClientSession, bot: Bot) -> None:
     if not is_admin(message.from_user.id):
         return
-    await schedule.refresh(http, force=True)
+    storage.state["changes_pending"] += await schedule.refresh(http, force=True)
+    await announce_changes(bot)
     new = await edu.refresh(http, force=True)
     await announce_new(bot, new)
     await status(message)
@@ -393,6 +395,18 @@ async def announce_new(bot: Bot, items: list[dict], skip_chat: int | None = None
                             skip_chat)
 
 
+async def announce_changes(bot: Bot) -> None:
+    """Рассылает накопленные изменения в расписании, но не ночью (с 22:00 до 7:00)."""
+    st = storage.state
+    if not st["changes_pending"] or not 7 <= texts.now().hour < 22:
+        return
+    text = texts.changes_text(st["changes_pending"])
+    st["changes_pending"] = []
+    storage.save()
+    if text:
+        await broadcast(bot, "changes", text + "\n\nВсё расписание — «🗓 Неделя».")
+
+
 def _at(hhmm: str) -> datetime:
     h, m = map(int, hhmm.split(":"))
     return texts.now().replace(hour=h, minute=m, second=0, microsecond=0)
@@ -446,7 +460,8 @@ async def tick(bot: Bot) -> None:
 async def background(bot: Bot, http: aiohttp.ClientSession) -> None:
     while True:
         try:
-            await schedule.refresh(http)
+            storage.state["changes_pending"] += await schedule.refresh(http)
+            await announce_changes(bot)
             new = await edu.refresh(http)
             await announce_new(bot, [d for d in new if not storage.was_sent(f"new:{d['id']}")])
             error = storage.state["edu"]["error"]
